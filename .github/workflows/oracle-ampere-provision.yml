@@ -1,14 +1,14 @@
 name: Oracle Ampere A1 Auto-Provisioner
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+  workflow_dispatch:    # triggered externally via API
+  repository_dispatch:
+    types: [ampere-retry]
 
 jobs:
   provision:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 4
 
     env:
       SUPPRESS_LABEL_WARNING: True
@@ -20,9 +20,7 @@ jobs:
 
     steps:
       - name: Install OCI CLI
-        run: |
-          pip install oci-cli --quiet
-          oci --version
+        run: pip install oci-cli --quiet
 
       - name: Configure OCI credentials
         env:
@@ -30,59 +28,66 @@ jobs:
           OCI_SSH_PUB: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
         run: |
           mkdir -p ~/.oci
-          echo "aW1wb3J0IG9zLCBzeXMKCnJhdyA9IG9zLmVudmlyb24uZ2V0KCdPQ0lfUFJJVkFURV9LRVknLCAnJykKCiMgRml4IGxpdGVyYWwgXG4KcmF3ID0gcmF3LnJlcGxhY2UoJ1xcbicsICdcbicpCgojIEZpeCBzcGFjZXMgaW5zdGVhZCBvZiBuZXdsaW5lcyBhcm91bmQgUEVNIGhlYWRlcnMKZm9yIHRhZyBpbiBbJ1JTQSBQUklWQVRFIEtFWScsICdQUklWQVRFIEtFWScsICdFQyBQUklWQVRFIEtFWSddOgogICAgcmF3ID0gcmF3LnJlcGxhY2UoJy0tLS0tQkVHSU4gJyArIHRhZyArICctLS0tLSAnLCAnLS0tLS1CRUdJTiAnICsgdGFnICsgJy0tLS0tXG4nKQogICAgcmF3ID0gcmF3LnJlcGxhY2UoJyAtLS0tLUVORCAnICsgdGFnICsgJy0tLS0tJywgJ1xuLS0tLS1FTkQgJyArIHRhZyArICctLS0tLScpCgppZiBub3QgcmF3LmVuZHN3aXRoKCdcbicpOgogICAgcmF3ICs9ICdcbicKCmxpbmVzID0gcmF3LnN0cmlwKCkuc3BsaXQoJ1xuJykKcHJpbnQoJ0tleSBmaXJzdCBsaW5lOicsIGxpbmVzWzBdKQpwcmludCgnS2V5IGxhc3QgbGluZSA6JywgbGluZXNbLTFdKQpwcmludCgnVG90YWwgbGluZXMgICA6JywgbGVuKGxpbmVzKSkKCmlmICctLS0tLUJFR0lOJyBub3QgaW4gbGluZXNbMF06CiAgICBwcmludCgnRVJST1I6IE5vdCBhIHZhbGlkIFBFTSBrZXkhJykKICAgIHN5cy5leGl0KDEpCgp3aXRoIG9wZW4oJy9ob21lL3J1bm5lci8ub2NpL29jaV9hcGlfa2V5LnBlbScsICd3JykgYXMgZjoKICAgIGYud3JpdGUocmF3KQoKY2ZnID0gJ1tERUZBVUxUXVxuJwpjZmcgKz0gJ3VzZXI9JyArIG9zLmVudmlyb25bJ09DSV9DTElfVVNFUiddICsgJ1xuJwpjZmcgKz0gJ3RlbmFuY3k9JyArIG9zLmVudmlyb25bJ09DSV9DTElfVEVOQU5DWSddICsgJ1xuJwpjZmcgKz0gJ2ZpbmdlcnByaW50PScgKyBvcy5lbnZpcm9uWydPQ0lfQ0xJX0ZJTkdFUlBSSU5UJ10gKyAnXG4nCmNmZyArPSAna2V5X2ZpbGU9L2hvbWUvcnVubmVyLy5vY2kvb2NpX2FwaV9rZXkucGVtXG4nCmNmZyArPSAncmVnaW9uPScgKyBvcy5lbnZpcm9uWydPQ0lfQ0xJX1JFR0lPTiddICsgJ1xuJwp3aXRoIG9wZW4oJy9ob21lL3J1bm5lci8ub2NpL2NvbmZpZycsICd3JykgYXMgZjoKICAgIGYud3JpdGUoY2ZnKQoKd2l0aCBvcGVuKCcvdG1wL3NzaF9wdWIua2V5JywgJ3cnKSBhcyBmOgogICAgZi53cml0ZShvcy5lbnZpcm9uLmdldCgnT0NJX1NTSF9QVUInLCAnJykpCgpwcmludCgnQWxsIGZpbGVzIHdyaXR0ZW4gT0snKQo=" | base64 -d > /tmp/setup_oci.py
-          python3 /tmp/setup_oci.py
+          python3 -c "
+          import os, sys
+          raw = os.environ.get('OCI_PRIVATE_KEY', '')
+          raw = raw.replace('\\\\n', '\\n')
+          for tag in ['RSA PRIVATE KEY', 'PRIVATE KEY', 'EC PRIVATE KEY']:
+              raw = raw.replace('-----BEGIN ' + tag + '----- ', '-----BEGIN ' + tag + '-----\\n')
+              raw = raw.replace(' -----END ' + tag + '-----', '\\n-----END ' + tag + '-----')
+          if not raw.endswith('\\n'):
+              raw += '\\n'
+          with open('/home/runner/.oci/oci_api_key.pem', 'w') as f:
+              f.write(raw)
+          cfg = '[DEFAULT]\\n'
+          cfg += 'user=' + os.environ['OCI_CLI_USER'] + '\\n'
+          cfg += 'tenancy=' + os.environ['OCI_CLI_TENANCY'] + '\\n'
+          cfg += 'fingerprint=' + os.environ['OCI_CLI_FINGERPRINT'] + '\\n'
+          cfg += 'key_file=/home/runner/.oci/oci_api_key.pem\\n'
+          cfg += 'region=' + os.environ['OCI_CLI_REGION'] + '\\n'
+          with open('/home/runner/.oci/config', 'w') as f:
+              f.write(cfg)
+          with open('/tmp/ssh_pub.key', 'w') as f:
+              f.write(os.environ.get('OCI_SSH_PUB', ''))
+          print('Credentials written OK')
+          "
           chmod 600 ~/.oci/oci_api_key.pem
-          chmod 600 ~/.oci/config
           oci setup repair-file-permissions --file ~/.oci/config
           oci setup repair-file-permissions --file ~/.oci/oci_api_key.pem
 
-          # Compute fingerprint from the actual key and show it
-          echo "--- Fingerprint from key file ---"
-          openssl rsa -pubout -outform DER -in ~/.oci/oci_api_key.pem 2>/dev/null | openssl md5 -c
-          echo "--- Fingerprint in secret ---"
-          echo "$OCI_CLI_FINGERPRINT"
-
-          echo "--- Testing OCI auth ---"
-          oci iam user get --user-id "$OCI_CLI_USER" --query "data.name" 2>&1
-
-      - name: Retry provisioning loop
+      - name: Attempt provisioning
         id: provision
         run: |
           set +e
-          STATUS="capacity"
-          OUTPUT=""
-          ADS=("${{ secrets.OCI_AD_1 }}" "${{ secrets.OCI_AD_2 }}" "${{ secrets.OCI_AD_3 }}")
-          ATTEMPT=0
-          END_TIME=$(( $(date +%s) + 240 ))
+          echo "Attempting to provision Ampere A1..."
 
-          while [ $(date +%s) -lt $END_TIME ]; do
-            ATTEMPT=$((ATTEMPT + 1))
-            AD=${ADS[$(( (ATTEMPT - 1) % 3 ))]}
-            echo "Attempt $ATTEMPT — AD: $AD"
+          OUTPUT=$(oci compute instance launch \
+            --availability-domain    "${{ secrets.OCI_AD_1 }}" \
+            --compartment-id         "${{ secrets.OCI_COMPARTMENT_OCID }}" \
+            --shape                  VM.Standard.A1.Flex \
+            --shape-config           '{"ocpus":4,"memoryInGBs":24}' \
+            --image-id               "${{ secrets.OCI_IMAGE_OCID }}" \
+            --subnet-id              "${{ secrets.OCI_SUBNET_OCID }}" \
+            --ssh-authorized-keys-file /tmp/ssh_pub.key \
+            --display-name           "ampere-always-free" \
+            --assign-public-ip       true \
+            2>&1)
 
-            OUTPUT=$(oci compute instance launch               --availability-domain    "$AD"               --compartment-id         "${{ secrets.OCI_COMPARTMENT_OCID }}"               --shape                  VM.Standard.A1.Flex               --shape-config           '{"ocpus":4,"memoryInGBs":24}'               --image-id               "${{ secrets.OCI_IMAGE_OCID }}"               --subnet-id              "${{ secrets.OCI_SUBNET_OCID }}"               --ssh-authorized-keys-file /tmp/ssh_pub.key               --display-name           "ampere-always-free"               --assign-public-ip       true               2>&1)
+          EXIT_CODE=$?
 
-            EXIT_CODE=$?
-
-            if [ $EXIT_CODE -eq 0 ]; then
-              STATUS="success"
-              echo "Provisioned on attempt $ATTEMPT, AD: $AD"
-              break
-            elif echo "$OUTPUT" | grep -q "Out of host capacity"; then
-              echo "No capacity. Waiting 30s..."
-              sleep 30
-            else
-              STATUS="error"
-              echo "Unexpected error: $OUTPUT"
-              break
-            fi
-          done
-
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-          echo "output<<EOF" >> $GITHUB_OUTPUT
-          echo "$OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "output<<EOF" >> $GITHUB_OUTPUT
+            echo "$OUTPUT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "Provisioned successfully!"
+          elif echo "$OUTPUT" | grep -q "Out of host capacity"; then
+            echo "status=capacity" >> $GITHUB_OUTPUT
+            echo "Out of capacity — will retry shortly"
+          else
+            echo "status=error" >> $GITHUB_OUTPUT
+            echo "Error: $OUTPUT"
+          fi
 
       - name: Extract instance details
         if: steps.provision.outputs.status == 'success'
@@ -90,13 +95,11 @@ jobs:
         run: |
           INSTANCE_ID=$(echo '${{ steps.provision.outputs.output }}' | python3 -c "
           import sys, json
-          data = json.load(sys.stdin)
-          print(data['data']['id'])
+          print(json.load(sys.stdin)['data']['id'])
           ")
           REGION=$(echo '${{ steps.provision.outputs.output }}' | python3 -c "
           import sys, json
-          data = json.load(sys.stdin)
-          print(data['data']['region'])
+          print(json.load(sys.stdin)['data']['region'])
           ")
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "REGION=$REGION" >> $GITHUB_OUTPUT
@@ -167,7 +170,7 @@ jobs:
             echo "## Provisioned!" >> $GITHUB_STEP_SUMMARY
             echo "Public IP: ${{ steps.details.outputs.PUBLIC_IP }}" >> $GITHUB_STEP_SUMMARY
           elif [ "$STATUS" = "capacity" ]; then
-            echo "## Out of Capacity - next run in 5 min" >> $GITHUB_STEP_SUMMARY
+            echo "## Out of Capacity — retrying shortly" >> $GITHUB_STEP_SUMMARY
           else
-            echo "## Unexpected error" >> $GITHUB_STEP_SUMMARY
+            echo "## Error — check logs" >> $GITHUB_STEP_SUMMARY
           fi
