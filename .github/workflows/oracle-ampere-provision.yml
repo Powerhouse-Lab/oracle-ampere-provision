@@ -12,6 +12,7 @@ jobs:
 
     env:
       SUPPRESS_LABEL_WARNING: True
+      OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: True
       OCI_CLI_USER:        ${{ secrets.OCI_USER_OCID }}
       OCI_CLI_TENANCY:     ${{ secrets.OCI_TENANCY_OCID }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_KEY_FINGERPRINT }}
@@ -32,6 +33,16 @@ jobs:
           echo "aW1wb3J0IG9zLCBzeXMKCnJhdyA9IG9zLmVudmlyb24uZ2V0KCdPQ0lfUFJJVkFURV9LRVknLCAnJykKCiMgRml4IGxpdGVyYWwgXG4KcmF3ID0gcmF3LnJlcGxhY2UoJ1xcbicsICdcbicpCgojIEZpeCBzcGFjZXMgaW5zdGVhZCBvZiBuZXdsaW5lcyBhcm91bmQgUEVNIGhlYWRlcnMKZm9yIHRhZyBpbiBbJ1JTQSBQUklWQVRFIEtFWScsICdQUklWQVRFIEtFWScsICdFQyBQUklWQVRFIEtFWSddOgogICAgcmF3ID0gcmF3LnJlcGxhY2UoJy0tLS0tQkVHSU4gJyArIHRhZyArICctLS0tLSAnLCAnLS0tLS1CRUdJTiAnICsgdGFnICsgJy0tLS0tXG4nKQogICAgcmF3ID0gcmF3LnJlcGxhY2UoJyAtLS0tLUVORCAnICsgdGFnICsgJy0tLS0tJywgJ1xuLS0tLS1FTkQgJyArIHRhZyArICctLS0tLScpCgppZiBub3QgcmF3LmVuZHN3aXRoKCdcbicpOgogICAgcmF3ICs9ICdcbicKCmxpbmVzID0gcmF3LnN0cmlwKCkuc3BsaXQoJ1xuJykKcHJpbnQoJ0tleSBmaXJzdCBsaW5lOicsIGxpbmVzWzBdKQpwcmludCgnS2V5IGxhc3QgbGluZSA6JywgbGluZXNbLTFdKQpwcmludCgnVG90YWwgbGluZXMgICA6JywgbGVuKGxpbmVzKSkKCmlmICctLS0tLUJFR0lOJyBub3QgaW4gbGluZXNbMF06CiAgICBwcmludCgnRVJST1I6IE5vdCBhIHZhbGlkIFBFTSBrZXkhJykKICAgIHN5cy5leGl0KDEpCgp3aXRoIG9wZW4oJy9ob21lL3J1bm5lci8ub2NpL29jaV9hcGlfa2V5LnBlbScsICd3JykgYXMgZjoKICAgIGYud3JpdGUocmF3KQoKY2ZnID0gJ1tERUZBVUxUXVxuJwpjZmcgKz0gJ3VzZXI9JyArIG9zLmVudmlyb25bJ09DSV9DTElfVVNFUiddICsgJ1xuJwpjZmcgKz0gJ3RlbmFuY3k9JyArIG9zLmVudmlyb25bJ09DSV9DTElfVEVOQU5DWSddICsgJ1xuJwpjZmcgKz0gJ2ZpbmdlcnByaW50PScgKyBvcy5lbnZpcm9uWydPQ0lfQ0xJX0ZJTkdFUlBSSU5UJ10gKyAnXG4nCmNmZyArPSAna2V5X2ZpbGU9L2hvbWUvcnVubmVyLy5vY2kvb2NpX2FwaV9rZXkucGVtXG4nCmNmZyArPSAncmVnaW9uPScgKyBvcy5lbnZpcm9uWydPQ0lfQ0xJX1JFR0lPTiddICsgJ1xuJwp3aXRoIG9wZW4oJy9ob21lL3J1bm5lci8ub2NpL2NvbmZpZycsICd3JykgYXMgZjoKICAgIGYud3JpdGUoY2ZnKQoKd2l0aCBvcGVuKCcvdG1wL3NzaF9wdWIua2V5JywgJ3cnKSBhcyBmOgogICAgZi53cml0ZShvcy5lbnZpcm9uLmdldCgnT0NJX1NTSF9QVUInLCAnJykpCgpwcmludCgnQWxsIGZpbGVzIHdyaXR0ZW4gT0snKQo=" | base64 -d > /tmp/setup_oci.py
           python3 /tmp/setup_oci.py
           chmod 600 ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/config
+          oci setup repair-file-permissions --file ~/.oci/config
+          oci setup repair-file-permissions --file ~/.oci/oci_api_key.pem
+
+          # Compute fingerprint from the actual key and show it
+          echo "--- Fingerprint from key file ---"
+          openssl rsa -pubout -outform DER -in ~/.oci/oci_api_key.pem 2>/dev/null | openssl md5 -c
+          echo "--- Fingerprint in secret ---"
+          echo "$OCI_CLI_FINGERPRINT"
+
           echo "--- Testing OCI auth ---"
           oci iam user get --user-id "$OCI_CLI_USER" --query "data.name" 2>&1
 
