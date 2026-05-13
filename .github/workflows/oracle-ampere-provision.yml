@@ -1,154 +1,162 @@
-name: Auto-Build Jellyfin App
+name: Oracle Ampere A1 Auto-Provisioner
+
 on:
-  push:
-    branches: [ "main" ]
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
-  build:
+  provision:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SUPPRESS_LABEL_WARNING: True
+      OCI_CLI_USER:        ${{ secrets.OCI_USER_OCID }}
+      OCI_CLI_TENANCY:     ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_KEY_FINGERPRINT }}
+      OCI_CLI_REGION:      ${{ secrets.OCI_REGION }}
+
     steps:
-      - name: Setup Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.19.x'
-          channel: 'stable'
-
-      - name: Create App Scaffolding
-        run: flutter create jellyfin_app
-
-      - name: Install Dependencies
-        working-directory: ./jellyfin_app
+      - name: Install OCI CLI
         run: |
-          flutter pub add media_kit media_kit_video media_kit_libs_video dio screen_brightness
+          pip install oci-cli --quiet
+          oci --version
 
-      - name: Configure Android Permissions, SDK & Kotlin Fix
-        working-directory: ./jellyfin_app
+      - name: Configure OCI credentials
+        env:
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_SSH_PUB: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
         run: |
-          # 1. Change Min SDK to 21 for MPV support
-          sed -i 's/flutter.minSdkVersion/21/g' android/app/build.gradle
-          
-          # 2. Add Internet permission for Release builds
-          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
-          
-          # 3. FIX THE KOTLIN ERROR: Upgrade Kotlin version to 1.9.22 so the brightness plugin compiles
-          sed -i "s/ext.kotlin_version = '.*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
+          mkdir -p ~/.oci
+          echo "aW1wb3J0IG9zLCBzeXMKCnJhdyA9IG9zLmVudmlyb24uZ2V0KCdPQ0lfUFJJVkFURV9LRVknLCAnJykKCiMgRml4IGxpdGVyYWwgXG4KcmF3ID0gcmF3LnJlcGxhY2UoJ1xcbicsICdcbicpCgojIEZpeCBzcGFjZXMgaW5zdGVhZCBvZiBuZXdsaW5lcyBhcm91bmQgUEVNIGhlYWRlcnMKZm9yIHRhZyBpbiBbJ1JTQSBQUklWQVRFIEtFWScsICdQUklWQVRFIEtFWScsICdFQyBQUklWQVRFIEtFWSddOgogICAgcmF3ID0gcmF3LnJlcGxhY2UoJy0tLS0tQkVHSU4gJyArIHRhZyArICctLS0tLSAnLCAnLS0tLS1CRUdJTiAnICsgdGFnICsgJy0tLS0tXG4nKQogICAgcmF3ID0gcmF3LnJlcGxhY2UoJyAtLS0tLUVORCAnICsgdGFnICsgJy0tLS0tJywgJ1xuLS0tLS1FTkQgJyArIHRhZyArICctLS0tLScpCgppZiBub3QgcmF3LmVuZHN3aXRoKCdcbicpOgogICAgcmF3ICs9ICdcbicKCmxpbmVzID0gcmF3LnN0cmlwKCkuc3BsaXQoJ1xuJykKcHJpbnQoJ0tleSBmaXJzdCBsaW5lOicsIGxpbmVzWzBdKQpwcmludCgnS2V5IGxhc3QgbGluZSA6JywgbGluZXNbLTFdKQpwcmludCgnVG90YWwgbGluZXMgICA6JywgbGVuKGxpbmVzKSkKCmlmICctLS0tLUJFR0lOJyBub3QgaW4gbGluZXNbMF06CiAgICBwcmludCgnRVJST1I6IE5vdCBhIHZhbGlkIFBFTSBrZXkhJykKICAgIHN5cy5leGl0KDEpCgp3aXRoIG9wZW4oJy9ob21lL3J1bm5lci8ub2NpL29jaV9hcGlfa2V5LnBlbScsICd3JykgYXMgZjoKICAgIGYud3JpdGUocmF3KQoKY2ZnID0gJ1tERUZBVUxUXVxuJwpjZmcgKz0gJ3VzZXI9JyArIG9zLmVudmlyb25bJ09DSV9DTElfVVNFUiddICsgJ1xuJwpjZmcgKz0gJ3RlbmFuY3k9JyArIG9zLmVudmlyb25bJ09DSV9DTElfVEVOQU5DWSddICsgJ1xuJwpjZmcgKz0gJ2ZpbmdlcnByaW50PScgKyBvcy5lbnZpcm9uWydPQ0lfQ0xJX0ZJTkdFUlBSSU5UJ10gKyAnXG4nCmNmZyArPSAna2V5X2ZpbGU9L2hvbWUvcnVubmVyLy5vY2kvb2NpX2FwaV9rZXkucGVtXG4nCmNmZyArPSAncmVnaW9uPScgKyBvcy5lbnZpcm9uWydPQ0lfQ0xJX1JFR0lPTiddICsgJ1xuJwp3aXRoIG9wZW4oJy9ob21lL3J1bm5lci8ub2NpL2NvbmZpZycsICd3JykgYXMgZjoKICAgIGYud3JpdGUoY2ZnKQoKd2l0aCBvcGVuKCcvdG1wL3NzaF9wdWIua2V5JywgJ3cnKSBhcyBmOgogICAgZi53cml0ZShvcy5lbnZpcm9uLmdldCgnT0NJX1NTSF9QVUInLCAnJykpCgpwcmludCgnQWxsIGZpbGVzIHdyaXR0ZW4gT0snKQo=" | base64 -d > /tmp/setup_oci.py
+          python3 /tmp/setup_oci.py
+          chmod 600 ~/.oci/oci_api_key.pem
+          echo "--- Testing OCI auth ---"
+          oci iam user get --user-id "$OCI_CLI_USER" --query "data.name" 2>&1
 
-      - name: Write the App Code (Flutter + MPV)
-        working-directory: ./jellyfin_app
+      - name: Retry provisioning loop
+        id: provision
         run: |
-          cat << 'EOF' > lib/main.dart
-          import 'dart:async';
-          import 'package:flutter/material.dart';
-          import 'package:media_kit/media_kit.dart';
-          import 'package:media_kit_video/media_kit_video.dart';
-          import 'package:screen_brightness/screen_brightness.dart';
+          set +e
+          STATUS="capacity"
+          OUTPUT=""
+          ADS=("${{ secrets.OCI_AD_1 }}" "${{ secrets.OCI_AD_2 }}" "${{ secrets.OCI_AD_3 }}")
+          ATTEMPT=0
+          END_TIME=$(( $(date +%s) + 240 ))
 
-          void main() {
-            WidgetsFlutterBinding.ensureInitialized();
-            MediaKit.ensureInitialized(); // Start MPV Native Engine
-            runApp(const MaterialApp(home: PlayerScreen(), themeMode: ThemeMode.dark));
-          }
+          while [ $(date +%s) -lt $END_TIME ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            AD=${ADS[$(( (ATTEMPT - 1) % 3 ))]}
+            echo "Attempt $ATTEMPT — AD: $AD"
 
-          class PlayerScreen extends StatefulWidget {
-            const PlayerScreen({Key? key}) : super(key: key);
-            @override
-            State<PlayerScreen> createState() => _PlayerScreenState();
-          }
+            OUTPUT=$(oci compute instance launch               --availability-domain    "$AD"               --compartment-id         "${{ secrets.OCI_COMPARTMENT_OCID }}"               --shape                  VM.Standard.A1.Flex               --shape-config           '{"ocpus":4,"memoryInGBs":24}'               --image-id               "${{ secrets.OCI_IMAGE_OCID }}"               --subnet-id              "${{ secrets.OCI_SUBNET_OCID }}"               --ssh-authorized-keys-file /tmp/ssh_pub.key               --display-name           "ampere-always-free"               --assign-public-ip       true               2>&1)
 
-          class _PlayerScreenState extends State<PlayerScreen> {
-            late final Player player;
-            late final VideoController controller;
-            bool showSkipIntro = false;
+            EXIT_CODE=$?
 
-            @override
-            void initState() {
-              super.initState();
-              // Feature: Direct Play, ASS Subtitles, Caching
-              player = Player(
-                configuration: const PlayerConfiguration(
-                  mpv: ['--cache=yes', '--hwdec=auto-safe', '--sub-ass-override=no'],
-                ),
-              );
-              controller = VideoController(player);
+            if [ $EXIT_CODE -eq 0 ]; then
+              STATUS="success"
+              echo "Provisioned on attempt $ATTEMPT, AD: $AD"
+              break
+            elif echo "$OUTPUT" | grep -q "Out of host capacity"; then
+              echo "No capacity. Waiting 30s..."
+              sleep 30
+            else
+              STATUS="error"
+              echo "Unexpected error: $OUTPUT"
+              break
+            fi
+          done
 
-              player.open(Media('http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'));
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-              player.stream.position.listen((pos) {
-                // Feature: Auto Skip Intro Logic (Demo: 10s to 30s)
-                if (pos.inSeconds >= 10 && pos.inSeconds <= 30 && !showSkipIntro) {
-                  setState(() => showSkipIntro = true);
-                } else if ((pos.inSeconds < 10 || pos.inSeconds > 30) && showSkipIntro) {
-                  setState(() => showSkipIntro = false);
-                }
-              });
-            }
+      - name: Extract instance details
+        if: steps.provision.outputs.status == 'success'
+        id: details
+        run: |
+          INSTANCE_ID=$(echo '${{ steps.provision.outputs.output }}' | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          print(data['data']['id'])
+          ")
+          REGION=$(echo '${{ steps.provision.outputs.output }}' | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          print(data['data']['region'])
+          ")
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "REGION=$REGION" >> $GITHUB_OUTPUT
 
-            @override
-            void dispose() {
-              player.dispose();
-              super.dispose();
-            }
+          echo "Waiting for public IP..."
+          for i in $(seq 1 9); do
+            sleep 10
+            VNIC=$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" 2>/dev/null)
+            PUBLIC_IP=$(echo "$VNIC" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          vnics = data.get('data', [])
+          print(vnics[0].get('publicIp', '') if vnics else '')
+          " 2>/dev/null)
+            if [ -n "$PUBLIC_IP" ] && [ "$PUBLIC_IP" != "None" ]; then
+              echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
+              echo "Got IP: $PUBLIC_IP"
+              break
+            fi
+            echo "Attempt $i: no IP yet..."
+          done
 
-            @override
-            Widget build(BuildContext context) {
-              return Scaffold(
-                backgroundColor: Colors.black,
-                body: Stack(
-                  children: [
-                    // Feature: Gesture Controls
-                    GestureDetector(
-                      onDoubleTapDown: (details) {
-                        final width = MediaQuery.of(context).size.width;
-                        if (details.globalPosition.dx < width / 2) {
-                          player.seek(player.state.position - const Duration(seconds: 10));
-                        } else {
-                          player.seek(player.state.position + const Duration(seconds: 10));
-                        }
-                      },
-                      onVerticalDragUpdate: (details) async {
-                        final width = MediaQuery.of(context).size.width;
-                        final delta = details.delta.dy * -1;
-                        if (details.globalPosition.dx > width / 2) {
-                          player.setVolume((player.state.volume + delta).clamp(0.0, 100.0));
-                        } else {
-                          double current = await ScreenBrightness().current;
-                          ScreenBrightness().setScreenBrightness((current + (delta / 100)).clamp(0.0, 1.0));
-                        }
-                      },
-                      child: Video(controller: controller),
-                    ),
-                    // Skip Intro UI
-                    if (showSkipIntro)
-                      Positioned(
-                        bottom: 80, right: 20,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            player.seek(const Duration(seconds: 30));
-                            setState(() => showSkipIntro = false);
-                          },
-                          child: const Text("Skip Intro"),
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            }
-          }
-          EOF
+      - name: Notify via Telegram
+        if: steps.provision.outputs.status == 'success'
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          PUBLIC_IP:   ${{ steps.details.outputs.PUBLIC_IP }}
+          INSTANCE_ID: ${{ steps.details.outputs.INSTANCE_ID }}
+          REGION:      ${{ steps.details.outputs.REGION }}
+        run: |
+          python3 -c "
+          import json, urllib.request, os
+          text = '\n'.join([
+            'Oracle Ampere A1 Provisioned!', '',
+            'Region:    ' + os.environ['REGION'],
+            'Shape:     VM.Standard.A1.Flex (4 OCPU / 24 GB)',
+            'Public IP: ' + os.environ['PUBLIC_IP'], '',
+            'SSH command:',
+            'ssh -i ~/.ssh/id_rsa ubuntu@' + os.environ['PUBLIC_IP'], '',
+            'Workflow disabled. Instance is ready!'
+          ])
+          payload = json.dumps({'chat_id': os.environ['TG_CHAT'], 'text': text}).encode()
+          req = urllib.request.Request(
+            'https://api.telegram.org/bot' + os.environ['TG_TOKEN'] + '/sendMessage',
+            data=payload, headers={'Content-Type': 'application/json'}
+          )
+          print(urllib.request.urlopen(req).read().decode())
+          "
 
-      - name: Compile Native Android APK
-        working-directory: ./jellyfin_app
-        run: flutter build apk --release
-
-      - name: Upload Finished App to You
-        uses: actions/upload-artifact@v4
+      - name: Disable workflow after success
+        if: steps.provision.outputs.status == 'success'
+        uses: actions/github-script@v7
         with:
-          name: My-Jellyfin-App
-          path: jellyfin_app/build/app/outputs/flutter-apk/app-release.apk
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.disableWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'oracle-ampere-provision.yml'
+            });
+
+      - name: Write job summary
+        if: always()
+        run: |
+          STATUS="${{ steps.provision.outputs.status }}"
+          if [ "$STATUS" = "success" ]; then
+            echo "## Provisioned!" >> $GITHUB_STEP_SUMMARY
+            echo "Public IP: ${{ steps.details.outputs.PUBLIC_IP }}" >> $GITHUB_STEP_SUMMARY
+          elif [ "$STATUS" = "capacity" ]; then
+            echo "## Out of Capacity - next run in 5 min" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Unexpected error" >> $GITHUB_STEP_SUMMARY
+          fi
