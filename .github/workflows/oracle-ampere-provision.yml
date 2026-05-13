@@ -2,8 +2,8 @@ name: Oracle Ampere A1 Auto-Provisioner
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # every 15 minutes
-  workflow_dispatch:          # manual trigger
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
 jobs:
   provision:
@@ -24,128 +24,132 @@ jobs:
           pip install oci-cli --quiet
           oci --version
 
-      # ── 2. Write private key from secret ────────────────────────────────
+      # ── 2. Configure OCI credentials ────────────────────────────────────
       - name: Configure OCI credentials
         run: |
           mkdir -p ~/.oci
           echo "$OCI_CLI_KEY_CONTENT" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
-          cat > ~/.oci/config <<EOF2
-          [DEFAULT]
-          user=$OCI_CLI_USER
-          tenancy=$OCI_CLI_TENANCY
-          fingerprint=$OCI_CLI_FINGERPRINT
-          key_file=~/.oci/oci_api_key.pem
-          region=$OCI_CLI_REGION
-          EOF2
+          printf '[DEFAULT]\nuser=%s\ntenancy=%s\nfingerprint=%s\nkey_file=%s\nregion=%s\n' \
+            "$OCI_CLI_USER" "$OCI_CLI_TENANCY" "$OCI_CLI_FINGERPRINT" \
+            "~/.oci/oci_api_key.pem" "$OCI_CLI_REGION" > ~/.oci/config
 
-      # ── 3. Attempt to launch Ampere A1 instance ──────────────────────────
+      # ── 3. Attempt to launch Ampere A1 (try all 3 ADs) ──────────────────
       - name: Attempt Ampere provisioning
         id: provision
         run: |
-          set +e   # don't fail fast — we check exit code manually
+          set +e
+          STATUS="capacity"
+          OUTPUT=""
 
-          OUTPUT=$(oci compute instance launch \
-            --availability-domain  "${{ secrets.OCI_AD }}" \
-            --compartment-id       "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-            --shape                VM.Standard.A1.Flex \
-            --shape-config         '{"ocpus":4,"memoryInGBs":24}' \
-            --image-id             "${{ secrets.OCI_IMAGE_OCID }}" \
-            --subnet-id            "${{ secrets.OCI_SUBNET_OCID }}" \
-            --ssh-authorized-keys-file /dev/stdin \
-            --display-name         "ampere-always-free" \
-            --assign-public-ip     true \
-            2>&1 <<SSH
-          ${{ secrets.OCI_SSH_PUBLIC_KEY }}
-          SSH
-          )
+          for AD in "${{ secrets.OCI_AD_1 }}" "${{ secrets.OCI_AD_2 }}" "${{ secrets.OCI_AD_3 }}"; do
+            echo "Trying AD: $AD"
+            OUTPUT=$(oci compute instance launch \
+              --availability-domain  "$AD" \
+              --compartment-id       "${{ secrets.OCI_COMPARTMENT_OCID }}" \
+              --shape                VM.Standard.A1.Flex \
+              --shape-config         '{"ocpus":4,"memoryInGBs":24}' \
+              --image-id             "${{ secrets.OCI_IMAGE_OCID }}" \
+              --subnet-id            "${{ secrets.OCI_SUBNET_OCID }}" \
+              --ssh-authorized-keys  "${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
+              --display-name         "ampere-always-free" \
+              --assign-public-ip     true \
+              2>&1)
 
-          EXIT_CODE=$?
-          echo "output=$OUTPUT" >> $GITHUB_OUTPUT
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+            EXIT_CODE=$?
 
-          if echo "$OUTPUT" | grep -q "Out of host capacity"; then
-            echo "status=capacity" >> $GITHUB_OUTPUT
-            echo "::notice::Out of Capacity — will retry in 15 min"
-          elif [ $EXIT_CODE -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-            echo "::notice::🎉 Instance provisioned successfully!"
-          else
-            echo "status=error" >> $GITHUB_OUTPUT
-            echo "::warning::Unexpected error: $OUTPUT"
-          fi
+            if [ $EXIT_CODE -eq 0 ]; then
+              STATUS="success"
+              echo "Provisioned on AD: $AD"
+              break
+            elif echo "$OUTPUT" | grep -q "Out of host capacity"; then
+              echo "AD $AD: Out of capacity, trying next..."
+            else
+              STATUS="error"
+              echo "AD $AD: Unexpected error: $OUTPUT"
+              break
+            fi
+          done
 
-      # ── 4. On success — extract instance details + public IP ────────────
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # ── 4. Extract public IP ─────────────────────────────────────────────
       - name: Extract instance details
         if: steps.provision.outputs.status == 'success'
         id: details
         run: |
-          echo "${{ steps.provision.outputs.output }}" | python3 -c "
+          INSTANCE_ID=$(echo '${{ steps.provision.outputs.output }}' | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
-          inst = data.get('data', {})
-          iid  = inst.get('id','')
-          name = inst.get('displayName','')
-          state= inst.get('lifecycleState','')
-          region=inst.get('region','')
-          shape= inst.get('shape','')
-          print(f'INSTANCE_ID={iid}')
-          print(f'DISPLAY_NAME={name}')
-          print(f'STATE={state}')
-          print(f'REGION={region}')
-          print(f'SHAPE={shape}')
-          " >> $GITHUB_OUTPUT
+          print(data['data']['id'])
+          ")
+          REGION=$(echo '${{ steps.provision.outputs.output }}' | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          print(data['data']['region'])
+          ")
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "REGION=$REGION" >> $GITHUB_OUTPUT
+          echo "SHAPE=VM.Standard.A1.Flex" >> $GITHUB_OUTPUT
 
-          # Wait up to 90s for instance to get a public IP
           echo "Waiting for public IP..."
-          INSTANCE_ID=$(echo "${{ steps.provision.outputs.output }}" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])")
           for i in $(seq 1 9); do
             sleep 10
             VNIC=$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" 2>/dev/null)
             PUBLIC_IP=$(echo "$VNIC" | python3 -c "
-          import sys,json
-          data=json.load(sys.stdin)
-          vnics=data.get('data',[])
-          print(vnics[0].get('publicIp','') if vnics else '')
+          import sys, json
+          data = json.load(sys.stdin)
+          vnics = data.get('data', [])
+          print(vnics[0].get('publicIp', '') if vnics else '')
           " 2>/dev/null)
             if [ -n "$PUBLIC_IP" ] && [ "$PUBLIC_IP" != "None" ]; then
               echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
-              echo "Got public IP: $PUBLIC_IP"
+              echo "Got IP: $PUBLIC_IP"
               break
             fi
             echo "Attempt $i: no IP yet..."
           done
 
-      # ── 5. On success — send Telegram notification ───────────────────────
+      # ── 5. Telegram notification ─────────────────────────────────────────
       - name: Notify via Telegram
         if: steps.provision.outputs.status == 'success'
         run: |
-          PUBLIC_IP="${{ steps.details.outputs.PUBLIC_IP }}"
-          INSTANCE_ID="${{ steps.details.outputs.INSTANCE_ID }}"
-          REGION="${{ steps.details.outputs.REGION }}"
-          SHAPE="${{ steps.details.outputs.SHAPE }}"
+          python3 - <<'PYEOF'
+          import json, urllib.request
 
-          MESSAGE="🎉 *Oracle Ampere A1 Provisioned\!*
+          public_ip   = "${{ steps.details.outputs.PUBLIC_IP }}"
+          instance_id = "${{ steps.details.outputs.INSTANCE_ID }}"
+          region      = "${{ steps.details.outputs.REGION }}"
+          bot_token   = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          chat_id     = "${{ secrets.TELEGRAM_CHAT_ID }}"
 
-🖥 *Instance:* \`${INSTANCE_ID:0:30}...\`
-🌍 *Region:* \`$REGION\`
-⚙️ *Shape:* \`$SHAPE\` \(4 OCPU / 24 GB\)
-🌐 *Public IP:* \`$PUBLIC_IP\`
+          text = "\n".join([
+            "Oracle Ampere A1 Provisioned!",
+            "",
+            "Region:    " + region,
+            "Shape:     VM.Standard.A1.Flex (4 OCPU / 24 GB)",
+            "Public IP: " + public_ip,
+            "",
+            "SSH command:",
+            "ssh -i ~/.ssh/id_rsa ubuntu@" + public_ip,
+            "",
+            "Workflow disabled. Instance is ready!"
+          ])
 
-🔑 *SSH Access:*
-\`\`\`
-ssh ubuntu@$PUBLIC_IP
-\`\`\`
-\(use your private key: ssh \-i ~/.ssh/id\_rsa ubuntu@$PUBLIC\_IP\)
+          payload = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+          req = urllib.request.Request(
+            "https://api.telegram.org/bot" + bot_token + "/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"}
+          )
+          resp = urllib.request.urlopen(req)
+          print("Telegram:", resp.read().decode())
+          PYEOF
 
-✅ Workflow has been disabled\. Your instance is ready\!"
-
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d parse_mode="MarkdownV2" \
-            -d text="$MESSAGE"
-
-      # ── 6. On success — disable the schedule so it stops running ─────────
+      # ── 6. Disable workflow after success ────────────────────────────────
       - name: Disable workflow after success
         if: steps.provision.outputs.status == 'success'
         uses: actions/github-script@v7
@@ -157,20 +161,18 @@ ssh ubuntu@$PUBLIC_IP
               repo: context.repo.repo,
               workflow_id: 'oracle-ampere-provision.yml'
             });
-            console.log('Workflow disabled — instance is provisioned!');
+            console.log('Workflow disabled.');
 
-      # ── 7. Summary ───────────────────────────────────────────────────────
+      # ── 7. Job summary ───────────────────────────────────────────────────
       - name: Write job summary
         if: always()
         run: |
           STATUS="${{ steps.provision.outputs.status }}"
           if [ "$STATUS" = "success" ]; then
-            echo "## 🎉 Provisioned!" >> $GITHUB_STEP_SUMMARY
+            echo "## Provisioned!" >> $GITHUB_STEP_SUMMARY
+            echo "Public IP: ${{ steps.details.outputs.PUBLIC_IP }}" >> $GITHUB_STEP_SUMMARY
           elif [ "$STATUS" = "capacity" ]; then
-            echo "## ⏳ Out of Capacity — retrying in 15 min" >> $GITHUB_STEP_SUMMARY
+            echo "## Out of Capacity - retrying in 15 min" >> $GITHUB_STEP_SUMMARY
           else
-            echo "## ⚠️ Unexpected error" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "${{ steps.provision.outputs.output }}" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "## Unexpected error" >> $GITHUB_STEP_SUMMARY
           fi
