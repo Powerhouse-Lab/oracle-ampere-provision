@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 10
 
     env:
+      SUPPRESS_LABEL_WARNING: True
       OCI_CLI_USER:        ${{ secrets.OCI_USER_OCID }}
       OCI_CLI_TENANCY:     ${{ secrets.OCI_TENANCY_OCID }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_KEY_FINGERPRINT }}
@@ -44,16 +45,17 @@ jobs:
 
           for AD in "${{ secrets.OCI_AD_1 }}" "${{ secrets.OCI_AD_2 }}" "${{ secrets.OCI_AD_3 }}"; do
             echo "Trying AD: $AD"
+            echo "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > /tmp/ssh_pub.key
             OUTPUT=$(oci compute instance launch \
-              --availability-domain  "$AD" \
-              --compartment-id       "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-              --shape                VM.Standard.A1.Flex \
-              --shape-config         '{"ocpus":4,"memoryInGBs":24}' \
-              --image-id             "${{ secrets.OCI_IMAGE_OCID }}" \
-              --subnet-id            "${{ secrets.OCI_SUBNET_OCID }}" \
-              --ssh-authorized-keys  "${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
-              --display-name         "ampere-always-free" \
-              --assign-public-ip     true \
+              --availability-domain    "$AD" \
+              --compartment-id         "${{ secrets.OCI_COMPARTMENT_OCID }}" \
+              --shape                  VM.Standard.A1.Flex \
+              --shape-config           '{"ocpus":4,"memoryInGBs":24}' \
+              --image-id               "${{ secrets.OCI_IMAGE_OCID }}" \
+              --subnet-id              "${{ secrets.OCI_SUBNET_OCID }}" \
+              --ssh-authorized-keys-file /tmp/ssh_pub.key \
+              --display-name           "ampere-always-free" \
+              --assign-public-ip       true \
               2>&1)
 
             EXIT_CODE=$?
